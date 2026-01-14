@@ -1,8 +1,38 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, GraduationCap, MapPin, Loader2, BookOpen, ExternalLink, Bot, User } from 'lucide-react';
+import { Send, GraduationCap, MapPin, Loader2, BookOpen, ExternalLink, Bot, User, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
+
+// --- Custom Markdown Components for beautiful formatting ---
+const markdownComponents = {
+  // Links: Blue and underlined
+  a: ({node, ...props}) => (
+    <a {...props} className="text-blue-400 hover:text-blue-300 underline font-medium transition-colors" target="_blank" rel="noopener noreferrer" />
+  ),
+  // Bold: Indigo color to make dates/deadlines pop
+  strong: ({node, ...props}) => (
+    <strong {...props} className="font-bold text-indigo-300" /> 
+  ),
+  // Lists: Proper spacing and marker color
+  ul: ({node, ...props}) => (
+    <ul {...props} className="list-disc ml-4 space-y-2 my-2 marker:text-indigo-400" />
+  ),
+  ol: ({node, ...props}) => (
+    <ol {...props} className="list-decimal ml-4 space-y-2 my-2 marker:text-indigo-400" />
+  ),
+  li: ({node, ...props}) => (
+    <li {...props} className="pl-1 leading-relaxed" />
+  ),
+  // Paragraphs: Ensure spacing
+  p: ({node, ...props}) => (
+    <p {...props} className="mb-2 last:mb-0 leading-relaxed" />
+  ),
+  // Blockquotes: Syling for notes/warnings
+  blockquote: ({node, ...props}) => (
+    <blockquote {...props} className="border-l-4 border-indigo-500 pl-4 py-1 my-3 bg-slate-800/30 italic text-slate-300 rounded-r" />
+  )
+};
 
 // --- Typing Effect Component ---
 const Typewriter = ({ text, onComplete }) => {
@@ -37,9 +67,7 @@ const Typewriter = ({ text, onComplete }) => {
     <ReactMarkdown 
       remarkPlugins={[remarkGfm]}
       className="prose prose-invert prose-sm max-w-none text-slate-100"
-      components={{
-        a: ({node, ...props}) => <a {...props} className="text-blue-400 hover:text-blue-300 underline" target="_blank" rel="noopener noreferrer" />
-      }}
+      components={markdownComponents}
     >
       {contentToShow}
     </ReactMarkdown>
@@ -47,6 +75,8 @@ const Typewriter = ({ text, onComplete }) => {
 };
 
 function App() {
+  const [sessions, setSessions] = useState([]);
+  const [currentSessionId, setCurrentSessionId] = useState(null);
   const [messages, setMessages] = useState([
     { 
       id: 'welcome',
@@ -57,12 +87,76 @@ function App() {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [currentTypingId, setCurrentTypingId] = useState(null); // ID of message currently typing
+  const [currentTypingId, setCurrentTypingId] = useState(null); 
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
+
+  // --- Session Management ---
+
+  const fetchSessions = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/sessions?user_id=student_default');
+      if (res.ok) {
+        const data = await res.json();
+        setSessions(data);
+        return data;
+      }
+    } catch (e) {
+      console.error("Failed to load sessions", e);
+    }
+    return [];
+  };
+
+  const loadSession = async (sessionId) => {
+    setIsLoading(true);
+    setCurrentSessionId(sessionId);
+    try {
+      const res = await fetch(`http://localhost:8000/history?session_id=${sessionId}`);
+      if (res.ok) {
+        const history = await res.json();
+        setMessages(history); 
+      }
+    } catch (e) {
+      console.error("Failed to load history", e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const createNewChat = () => {
+    setCurrentSessionId(null);
+    setMessages([{ 
+      id: 'welcome',
+      role: 'assistant', 
+      content: "Nieuwe chat gestart! Waarmee kan ik je helpen?", 
+      sources: [] 
+    }]);
+  };
+
+  const deleteSession = async (e, sessionId) => {
+    e.stopPropagation(); // Prevent triggering loadSession
+    if (!window.confirm("Ben je zeker dat je deze chat wilt verwijderen?")) return;
+
+    try {
+      await fetch(`http://localhost:8000/sessions/${sessionId}`, { method: 'DELETE' });
+      setSessions(prev => prev.filter(s => s.id !== sessionId));
+      
+      // If we deleted the active session, go to new chat
+      if (currentSessionId === sessionId) {
+        createNewChat();
+      }
+    } catch (error) {
+      console.error("Failed to delete session", error);
+    }
+  };
+
+  // Initial Load
+  useEffect(() => {
+    fetchSessions();
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
@@ -77,18 +171,38 @@ function App() {
     setInput('');
     setIsLoading(true);
 
+    let activeSessionId = currentSessionId;
+
     try {
+      // 1. Create Session if needed
+      if (!activeSessionId) {
+        const sessionRes = await fetch('http://localhost:8000/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: 'student_default' })
+        });
+        const sessionData = await sessionRes.json();
+        activeSessionId = sessionData.id;
+        setCurrentSessionId(activeSessionId);
+        // Refresh list to show new session
+        fetchSessions(); 
+      }
+
+      // 2. Send Query
       const response = await fetch('http://localhost:8000/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: userMessage.content }),
+        body: JSON.stringify({ 
+          question: userMessage.content,
+          session_id: activeSessionId // Pass session ID
+        }),
       });
 
       if (!response.ok) throw new Error('Network error');
       
       const data = await response.json();
       
-      // Add assistant message but mark it as "typing"
+      // 3. Add assistant message
       const botMessageId = Date.now() + 1;
       setMessages(prev => [...prev, { 
         id: botMessageId, 
@@ -99,11 +213,15 @@ function App() {
       }]);
       setCurrentTypingId(botMessageId);
 
+      // 4. Refresh session list (titles might update)
+      fetchSessions();
+
     } catch (error) {
+      console.error(error);
       setMessages(prev => [...prev, { 
         id: Date.now(), 
         role: 'assistant', 
-        content: "Sorry, er ging iets mis bij het ophalen van het antwoord. Controleer of de backend draait.",
+        content: "Sorry, er ging iets mis bij het ophalen van het antwoord.",
         sources: [] 
       }]);
     } finally {
@@ -136,16 +254,41 @@ function App() {
           </div>
         </div>
 
-        <nav className="flex-1 space-y-2">
-          <button className="flex items-center gap-3 w-full px-3 py-2 text-sm text-slate-300 hover:bg-slate-800 rounded-md transition-colors">
-            <MapPin size={18} />
-            <span>Bestemmingen</span>
-          </button>
-          <button className="flex items-center gap-3 w-full px-3 py-2 text-sm text-slate-300 hover:bg-slate-800 rounded-md transition-colors">
-            <BookOpen size={18} />
-            <span>Procedures</span>
-          </button>
-        </nav>
+        <button 
+             onClick={createNewChat} 
+             className="flex items-center gap-3 w-full px-3 py-2 text-sm text-slate-300 hover:bg-slate-800 rounded-md transition-colors border border-dashed border-slate-700 mb-6"
+        >
+             <BookOpen size={18} />
+             <span>+ Nieuwe Chat</span>
+        </button>
+
+        <div className="flex-1 overflow-y-auto space-y-2 pr-2 scrollbar-thin">
+           <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2">Recente Chats</h3>
+           {sessions.map(session => (
+             <div 
+                key={session.id}
+                onClick={() => loadSession(session.id)}
+                className={`group flex items-center justify-between w-full px-3 py-2 text-sm rounded-md transition-colors cursor-pointer ${
+                  currentSessionId === session.id ? 'bg-indigo-900/50 text-indigo-200' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                }`}
+             >
+                <div className="flex items-center gap-2 truncate">
+                   <span className="truncate max-w-[160px]" title={session.title}>{session.title}</span>
+                </div>
+                <button 
+                  onClick={(e) => deleteSession(e, session.id)}
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-900/50 hover:text-red-400 rounded transition-all"
+                  title="Verwijder chat"
+                >
+                  <Trash2 size={14} />
+                </button>
+             </div>
+           ))}
+           
+           {sessions.length === 0 && (
+              <p className="text-xs text-slate-600 px-3 italic">Nog geen chats...</p>
+           )}
+        </div>
 
         <div className="mt-auto pt-4 border-t border-slate-800 text-xs text-slate-500">
           <p>&copy; 2024 Howest International</p>
@@ -199,9 +342,7 @@ function App() {
                            <ReactMarkdown 
                               remarkPlugins={[remarkGfm]}
                               className="prose prose-invert prose-sm max-w-none text-slate-200"
-                              components={{
-                                a: ({node, ...props}) => <a {...props} className="text-blue-400 hover:text-blue-300 underline" target="_blank" rel="noopener noreferrer" />
-                              }}
+                              components={markdownComponents}
                            >
                             {msg.content}
                            </ReactMarkdown>

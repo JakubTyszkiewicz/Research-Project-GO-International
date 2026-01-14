@@ -10,3 +10,4 @@ tqdm
 sentence-transformers
 chromadb
 httpx
+sqlalchemy
