@@ -4,6 +4,8 @@ import glob
 from typing import List
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -16,9 +18,22 @@ from langchain_core.output_parsers import StrOutputParser
 
 app = FastAPI(title="International Processes Chatbot RAG")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
 # --- Configuration ---
 DATA_PATH = "/data"
 DB_PATH = "/app/db"
+
+# Mount /data directory to serve PDFs
+# Accessible via http://localhost:8000/static/...
+app.mount("/static", StaticFiles(directory=DATA_PATH), name="static")
+
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 MODEL_NAME = "llama3"
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"  # Efficient sentence-transformer model
@@ -119,14 +134,20 @@ def initialize_rag():
     llm = OllamaLLM(model=MODEL_NAME, base_url=OLLAMA_BASE_URL)
 
     # 5. Setup Chain
-    # System Prompt: Dutch output, Domain focus, Citations required.
+    # System Prompt: Dutch output, Domain focus, Auto-formatting.
     template = """Je bent een AI-assistent voor studenten van Howest. Je helpt hen met vragen over internationale stages, studieprogramma's in het buitenland en visumprocedures.
 
 Gebruik de volgende context om de vraag te beantwoorden.
 Antwoord ALTIJD in het Nederlands.
-Als je het antwoord niet weet op basis van de context, zeg dan dat je het niet weet. Ga geen informatie verzinnen.
 
-BELANGRIJK: Citeer bij elk antwoord de bronbestanden waar je de informatie vandaan hebt gehaald. Gebruik het formaat: [Bron: bestandsnaam] aan het einde van de relevante zinnen of paragraaf.
+INSTRUCTIES VOOR OPMAAK:
+1. Gebruik Markdown om de tekst leesbaar te maken.
+2. Gebruik **vetgedrukte tekst** voor belangrijke datums, deadlines of kernbegrippen.
+3. Gebruik bullet points (-) of genummerde lijsten voor opsommingen.
+4. Voeg witregels toe tussen paragrafen.
+5. Zet GEEN bronvermeldingen (zoals [Bron: ...]) in de tekst zelf; deze worden door het systeem toegevoegd.
+
+Als je het antwoord niet weet op basis van de context, zeg dan dat je het niet weet. Ga geen informatie verzinnen.
 
 Context:
 {context}
