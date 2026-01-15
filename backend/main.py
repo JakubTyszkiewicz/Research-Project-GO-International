@@ -177,9 +177,8 @@ Antwoord:"""
 
 @app.on_event("startup")
 async def startup_event():
-    # Run initialization synchronously (blocking)
-    # This prevents the backend from accepting requests until the model is loaded
-    await asyncio.to_thread(initialize_rag)
+    # Run initialization in the background so the server starts immediately
+    asyncio.create_task(asyncio.to_thread(initialize_rag))
 
 # --- Endpoints ---
 
